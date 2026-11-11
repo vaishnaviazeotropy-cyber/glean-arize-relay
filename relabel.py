@@ -31,6 +31,7 @@ with hand-written dicts (see test_relabel.py).
 """
 from __future__ import annotations
 
+import json
 import re
 from typing import Any
 
@@ -49,14 +50,63 @@ _MSG_RE = re.compile(
 )
 
 
+def _parse_json_messages(attrs: dict[str, Any], io: str) -> list[dict[str, Any]] | None:
+    """Glean's REAL shape: the whole messages list is ONE attribute whose value is a
+    JSON string, e.g.
+        gen_ai.output.messages = '[{"finish_reason":"stop",
+            "parts":[{"content":"...","type":"reasoning"},
+                     {"content":"THE ANSWER","type":"text"}],
+            "role":"assistant"}]'
+    Returns a normalized [{"role","parts":[{"type","content"}]}] list, or None if the
+    key isn't present / isn't parseable (so the caller can fall back to dotted keys).
+    """
+    for key in (f"gen_ai.{io}.messages", f"gen_ai.{_alias(io)}.messages"):
+        raw = attrs.get(key)
+        if raw is None:
+            continue
+        data = raw
+        if isinstance(data, str):
+            try:
+                data = json.loads(data)
+            except (ValueError, TypeError):
+                return None
+        if isinstance(data, dict):
+            data = [data]
+        if not isinstance(data, list):
+            return None
+        out: list[dict[str, Any]] = []
+        for msg in data:
+            if not isinstance(msg, dict):
+                continue
+            parts_in = msg.get("parts")
+            parts: list[dict[str, Any]] = []
+            if isinstance(parts_in, list):
+                for p in parts_in:
+                    if isinstance(p, dict):
+                        parts.append({"type": p.get("type"), "content": p.get("content")})
+                    elif isinstance(p, str):
+                        parts.append({"type": "text", "content": p})
+            elif msg.get("content") is not None:   # message-level content, no parts
+                parts.append({"type": "text", "content": msg.get("content")})
+            out.append({"role": msg.get("role"), "parts": parts})
+        return out
+    return None
+
+
 def _group_messages(attrs: dict[str, Any], io: str) -> list[dict[str, Any]]:
-    """Rebuild gen_ai.<io>.messages[] from the flattened dotted keys.
+    """Rebuild gen_ai.<io>.messages[] from EITHER Glean's JSON-string key (preferred)
+    OR the older flattened dotted keys (fallback).
 
     Returns a list ordered by message index, each like:
       {"role": "assistant", "parts": [{"type": "reasoning", "content": "..."},
                                        {"type": "text",      "content": "..."}]}
-    Only the fields Glean actually sent are present.
     """
+    # Preferred: single JSON-string attribute (what Glean actually sends).
+    from_json = _parse_json_messages(attrs, io)
+    if from_json is not None:
+        return from_json
+
+    # Fallback: flattened dotted keys (gen_ai.<io>.messages.0.parts.1.content).
     # messages[idx] -> {"role": str, "parts": {part_idx: {field: value}}}
     msgs: dict[int, dict[str, Any]] = {}
     for key, val in attrs.items():
