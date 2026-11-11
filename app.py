@@ -98,6 +98,16 @@ async def relay_traces(request: Request):
     for sp in iter_spans(req):
         attrs = span_attrs_to_dict(sp)
         new_attrs = relabel_attributes(sp.name, attrs)
+
+        # DEBUG: dump the RAW attribute keys so we can see exactly what Glean sends.
+        # Turn on with RELAY_DUMP_KEYS=1. Logs names + a short value preview for each key.
+        if os.getenv("RELAY_DUMP_KEYS") == "1":
+            log.info("RAWSPAN name=%r keys=%s", sp.name, sorted(attrs.keys()))
+            for k in sorted(attrs.keys()):
+                if any(t in k.lower() for t in ("message", "content", "output", "input",
+                                                "completion", "prompt", "answer", "text", "gen_ai")):
+                    log.info("RAWKV %s = %r", k, str(attrs[k])[:120])
+
         if new_attrs != attrs:
             apply_attrs_to_span(sp, new_attrs)
             relabelled += 1
