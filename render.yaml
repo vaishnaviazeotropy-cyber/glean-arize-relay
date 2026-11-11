@@ -1,0 +1,29 @@
+# Render Blueprint for the Glean -> Arize relabel relay.
+# Render reads this file to create the web service automatically.
+#
+# How to use (see DEPLOY.md for the full walkthrough):
+#   1. Push this folder to a GitHub repo.
+#   2. On render.com: New + -> Blueprint -> pick the repo.
+#   3. Render reads this file and creates the service.
+#   4. Set the secret env vars (ARIZE_SPACE_ID, ARIZE_API_KEY) in the dashboard — NOT here.
+#
+services:
+  - type: web
+    name: glean-arize-relay
+    runtime: python
+    plan: free                      # Render's free web service tier
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: ARIZE_PROJECT
+        value: glean-banking-agent
+      - key: ARIZE_OTLP_URL
+        value: https://otlp.arize.com/v1/traces
+      - key: RELAY_LOG_BODIES
+        value: "1"
+      # Secrets — leave these UNSET here and add them in the Render dashboard
+      # (Environment tab) so they are never committed to git:
+      - key: ARIZE_SPACE_ID
+        sync: false
+      - key: ARIZE_API_KEY
+        sync: false
