@@ -103,10 +103,12 @@ async def relay_traces(request: Request):
         # Turn on with RELAY_DUMP_KEYS=1. Logs names + a short value preview for each key.
         if os.getenv("RELAY_DUMP_KEYS") == "1":
             log.info("RAWSPAN name=%r keys=%s", sp.name, sorted(attrs.keys()))
+            dump_len = int(os.getenv("RELAY_DUMP_LEN", "120"))
             for k in sorted(attrs.keys()):
                 if any(t in k.lower() for t in ("message", "content", "output", "input",
-                                                "completion", "prompt", "answer", "text", "gen_ai")):
-                    log.info("RAWKV %s = %r", k, str(attrs[k])[:120])
+                                                "completion", "prompt", "answer", "text",
+                                                "question", "query", "tool", "gen_ai")):
+                    log.info("RAWKV name=%r %s = %r", sp.name, k, str(attrs[k])[:dump_len])
 
         if new_attrs != attrs:
             apply_attrs_to_span(sp, new_attrs)
