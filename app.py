@@ -43,10 +43,12 @@ try:
     from .otlp_codec import decode_request, encode_request, iter_spans, \
         span_attrs_to_dict, apply_attrs_to_span
     from .relabel import relabel_attributes
+    from . import glean_input
 except ImportError:
     from otlp_codec import decode_request, encode_request, iter_spans, \
         span_attrs_to_dict, apply_attrs_to_span
     from relabel import relabel_attributes
+    import glean_input
 
 log = logging.getLogger("glean_arize_relay")
 logging.basicConfig(level=logging.INFO)
@@ -94,10 +96,23 @@ async def relay_traces(request: Request):
         return JSONResponse({"error": f"bad OTLP protobuf: {e}"}, status_code=400)
 
     # relabel every span in place
-    relabelled, with_output = 0, 0
+    relabelled, with_output, with_input = 0, 0, 0
     for sp in iter_spans(req):
         attrs = span_attrs_to_dict(sp)
         new_attrs = relabel_attributes(sp.name, attrs)
+
+        # OPTIONAL input fill: if the span has no input.value, try to fetch the user's
+        # question from Glean using the conversation id. Fully fail-safe — any problem
+        # returns None and we simply don't set input (output path is untouched).
+        if "input.value" not in new_attrs and glean_input.enabled():
+            conv_id = attrs.get("gen_ai.conversation.id")
+            try:
+                q = glean_input.question_for_conversation(conv_id)
+            except Exception:
+                q = None
+            if q:
+                new_attrs["input.value"] = q
+                new_attrs.setdefault("input.mime_type", "text/plain")
 
         # DEBUG: dump the RAW attribute keys so we can see exactly what Glean sends.
         # Turn on with RELAY_DUMP_KEYS=1. Logs names + a short value preview for each key.
@@ -115,6 +130,8 @@ async def relay_traces(request: Request):
             relabelled += 1
             if "output.value" in new_attrs:
                 with_output += 1
+            if "input.value" in new_attrs:
+                with_input += 1
             if LOG_BODIES:
                 log.info("span '%s': input=%r output=%r kind=%s",
                          sp.name,
@@ -140,8 +157,8 @@ async def relay_traces(request: Request):
         log.error("forward to Arize failed: %r", e)
         return JSONResponse({"error": f"forward failed: {e}"}, status_code=502)
 
-    log.info("relabelled %d span(s) (%d with output), Arize responded %d",
-             relabelled, with_output, resp.status_code)
+    log.info("relabelled %d span(s) (%d with output, %d with input), Arize responded %d",
+             relabelled, with_output, with_input, resp.status_code)
 
     # mirror Arize's status to Glean; OTLP success is 200 with an (often empty) protobuf body
     return Response(content=resp.content, status_code=resp.status_code,
